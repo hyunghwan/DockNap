@@ -99,7 +99,7 @@ final class PowerMonitor: @unchecked Sendable {
             // Bound our own delay even if a disk is busy or has stopped responding.
             let deadline = DispatchTime.now() + 12
             // Reserve time for the short chime to finish before the hard sleep deadline.
-            soundStartDeadline = deadline - 1.5
+            soundStartDeadline = deadline - (UnmountSound.timeout + 0.25)
             DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
                 self?.finish(cycle: cycle)
             }

@@ -63,12 +63,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { allow(); return }
             self.lastDiskIssue = nil
             self.coordinator.willSleep(allow: allow)
-        }, onDidWake: { [weak self] in self?.coordinator.didWake() })
+        }, onDidWake: { [weak self] in
+            self?.unmountSound.cancel()
+            self?.coordinator.didWake()
+        })
         power = monitor
         if !monitor.start() { startupIssue = "Sleep monitoring is unavailable. Reopen DockNap to retry." }
     }
 
-    func applicationWillTerminate(_ notification: Notification) { power?.stop() }
+    func applicationWillTerminate(_ notification: Notification) {
+        unmountSound.cancel()
+        power?.stop()
+    }
 
     private func uniqueVolume(_ id: String) -> ExternalVolume? {
         disks.volumes.first { $0.id == id && !$0.isAmbiguous }
@@ -182,6 +188,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func quitApp() { NSApp.terminate(nil) }
+}
+
+if CommandLine.arguments.dropFirst().elementsEqual([UnmountSound.helperArgument]) {
+    exit(ChimePlayback().run() ? EXIT_SUCCESS : EXIT_FAILURE)
 }
 
 let app = NSApplication.shared
