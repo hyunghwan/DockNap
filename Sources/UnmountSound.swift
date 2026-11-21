@@ -73,7 +73,10 @@ final class ChimePlayback: NSObject, AVAudioPlayerDelegate {
     private var result: Bool?
 
     func run() -> Bool {
-        let url = URL(fileURLWithPath: "/System/Library/Sounds/Tink.aiff")
+        guard let url = Bundle.main.url(forResource: "UnmountComplete", withExtension: "wav") else {
+            audioLog.error("Missing unmount completion sound")
+            return false
+        }
         guard let speaker = ChimeOutput.builtInSpeakerUID() else {
             audioLog.notice("Built-in speaker unavailable for unmount sound")
             return false
