@@ -3,8 +3,10 @@ import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let disks = DiskService()
+    private let unmountSound = UnmountSound()
     private let menu = NSMenu()
     private let defaultsKey = "selectedVolumes"
+    private let soundKey = "playUnmountSound"
     private var selected = [String: String]()
     private var statusItem: NSStatusItem?
     private var power: PowerMonitor?
@@ -21,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UserDefaults.standard.register(defaults: [soundKey: true])
         selected = UserDefaults.standard.dictionary(forKey: defaultsKey) as? [String: String] ?? [:]
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem = item
@@ -37,6 +40,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.menu = menu
 
         disks.onDisconnect = { [weak self] id in self?.coordinator.volumeDisconnected(id) }
+        coordinator.canSignalSafeRemoval = { [weak self] in
+            guard let self, UserDefaults.standard.bool(forKey: self.soundKey) else { return false }
+            return self.disks.canSignalSafeRemoval() && self.power?.canStartUnmountSound == true
+        }
+        coordinator.onReadyForSleep = { [weak self] done in
+            guard let self else {
+                done()
+                return
+            }
+            self.unmountSound.play(completion: done)
+        }
         coordinator.onFailure = { [weak self] id, operation in
             guard let self, let name = self.selected[id] else { return }
             self.lastDiskIssue = "Couldn’t \(operation) “\(name)”"
@@ -95,6 +109,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             addLabel(issue)
         }
         menu.addItem(.separator())
+        let sound = addAction("Play Unmount Sound", #selector(toggleSound))
+        sound.state = UserDefaults.standard.bool(forKey: soundKey) ? .on : .off
         let login = addAction("Launch at Login", #selector(toggleLogin))
         switch SMAppService.mainApp.status {
         case .enabled: login.state = .on
@@ -134,6 +150,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             selected[id] = volume.name
         }
         UserDefaults.standard.set(selected, forKey: defaultsKey)
+    }
+
+    @objc private func toggleSound() {
+        let defaults = UserDefaults.standard
+        defaults.set(!defaults.bool(forKey: soundKey), forKey: soundKey)
     }
 
     @objc private func toggleLogin() {
