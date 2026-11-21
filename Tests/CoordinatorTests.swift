@@ -10,7 +10,6 @@ private final class Rig {
     var attachmentOverrides = [String: String]()
     var deferMounts = false
     var canMountVolumes = true
-    var soundCompletions = [() -> Void]()
     private var pendingMounts = [String: (Bool) -> Void]()
     private var replies = [String: [(Bool) -> Void]]()
     private var scheduled = [(deadline: TimeInterval, action: () -> Void)]()
@@ -44,11 +43,6 @@ private final class Rig {
 
     func sleep() {
         coordinator.willSleep { self.acknowledgements += 1 }
-    }
-
-    func observeSound(canSignal: Bool = true) {
-        coordinator.canSignalSafeRemoval = { canSignal }
-        coordinator.onReadyForSleep = { self.soundCompletions.append($0) }
     }
 
     func finishUnmount(_ id: String, success: Bool = true) {
@@ -115,13 +109,7 @@ private enum CoordinatorTests {
         mountReplyAfterNextSleep()
         lockedWakeWaitsForUnlock()
         sleepingAgainWhileWaitingForUnlock()
-        sleepWaitsForUnmountSound()
-        incompleteUnmountsStaySilent()
-        noWorkOrUnsafeInventoryStaysSilent()
-        expiredSleepStaysSilent()
-        wakeBeforeSoundStaysSilent()
-        staleSoundCannotAllowAnotherSleep()
-        print("15 coordinator scenarios passed")
+        print("9 coordinator scenarios passed")
     }
 
     /// Busy, absent, already-unmounted and unselected volumes must never be mounted by this cycle.
@@ -285,97 +273,5 @@ private enum CoordinatorTests {
         rig.coordinator.didWake()
         rig.runTimers()
         check(rig.mountCalls == ["A"] && rig.acknowledgements == 2, "The next wake must restore exactly once")
-    }
-
-    static func sleepWaitsForUnmountSound() {
-        let rig = Rig(["A": true, "B": true], selected: ["A", "B"])
-        rig.observeSound()
-        rig.sleep()
-        rig.finishUnmount("B")
-        check(rig.soundCompletions.isEmpty && rig.acknowledgements == 0, "One volume is still unmounting")
-        rig.finishUnmount("A")
-        check(rig.soundCompletions.count == 1 && rig.acknowledgements == 0, "Sleep must wait for the one success cue")
-        rig.soundCompletions[0]()
-        rig.soundCompletions[0]()
-        check(rig.acknowledgements == 1 && rig.soundCompletions.count == 1, "Completing the sound must allow sleep once")
-        rig.coordinator.didWake()
-        rig.runTimers()
-        check(rig.mountCalls.sorted() == ["A", "B"] && rig.soundCompletions.count == 1, "Wake must restore silently")
-    }
-
-    static func incompleteUnmountsStaySilent() {
-        let busy = Rig(["A": true, "busy": true], selected: ["A", "busy"])
-        busy.observeSound()
-        busy.sleep()
-        busy.finishUnmount("busy", success: false)
-        busy.finishUnmount("A")
-        check(busy.soundCompletions.isEmpty && busy.acknowledgements == 1, "A partial success must stay silent")
-
-        let unplugged = Rig(["A": true, "B": true], selected: ["A", "B"])
-        unplugged.observeSound()
-        unplugged.sleep()
-        unplugged.disconnect("B")
-        unplugged.finishUnmount("B")
-        unplugged.finishUnmount("A")
-        check(unplugged.soundCompletions.isEmpty && unplugged.acknowledgements == 1, "A detached target did not finish safely")
-    }
-
-    static func noWorkOrUnsafeInventoryStaysSilent() {
-        let idle = Rig(["manual": false], selected: ["manual", "absent"])
-        idle.observeSound()
-        idle.sleep()
-        check(idle.soundCompletions.isEmpty && idle.acknowledgements == 1, "No unmount means no completion sound")
-
-        let blocked = Rig(["A": true, "other": true], selected: ["A"])
-        blocked.observeSound(canSignal: false)
-        blocked.sleep()
-        blocked.finishUnmount("A")
-        check(blocked.soundCompletions.isEmpty && blocked.acknowledgements == 1, "Unsafe inventory must suppress the cue")
-        check(blocked.unmountCalls == ["A"], "The readiness check must leave unselected volumes alone")
-    }
-
-    static func expiredSleepStaysSilent() {
-        let rig = Rig(["A": true], selected: ["A"])
-        rig.observeSound()
-        rig.sleep()
-        rig.coordinator.canSignalSafeRemoval = { false } // The power monitor's playback window expired.
-        rig.finishUnmount("A")
-        check(rig.soundCompletions.isEmpty, "A late success must not signal after the sleep deadline")
-        rig.coordinator.didWake()
-        rig.runTimers()
-        check(rig.mountCalls == ["A"], "A missed cue must not lose the restore")
-        rig.coordinator.canSignalSafeRemoval = { true }
-        rig.sleep()
-        rig.finishUnmount("A")
-        check(rig.soundCompletions.count == 1, "The next sleep should signal normally")
-        rig.soundCompletions[0]()
-    }
-
-    static func wakeBeforeSoundStaysSilent() {
-        let rig = Rig(["A": true], selected: ["A"])
-        rig.observeSound()
-        rig.sleep()
-        rig.coordinator.didWake()
-        rig.finishUnmount("A")
-        rig.runTimers()
-        check(rig.soundCompletions.isEmpty && rig.mountCalls == ["A"], "A late unmount must restore without playing on wake")
-    }
-
-    static func staleSoundCannotAllowAnotherSleep() {
-        let rig = Rig(["A": true], selected: ["A"])
-        rig.observeSound()
-        rig.sleep()
-        rig.finishUnmount("A")
-        check(rig.soundCompletions.count == 1, "The first cue should be in flight")
-        rig.coordinator.didWake()
-        rig.runTimers()
-        var latestAcknowledgements = 0
-        rig.coordinator.willSleep { latestAcknowledgements += 1 }
-        rig.finishUnmount("A")
-        check(rig.soundCompletions.count == 2, "An old sound must not suppress the next sleep's cue")
-        rig.soundCompletions[0]()
-        check(latestAcknowledgements == 0, "An old sound released the current sleep")
-        rig.soundCompletions[1]()
-        check(latestAcknowledgements == 1, "The current cue should release the current sleep once")
     }
 }

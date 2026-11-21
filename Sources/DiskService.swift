@@ -84,33 +84,6 @@ final class DiskService {
         setMounted(true, id: id, completion: completion)
     }
 
-    func canSignalSafeRemoval() -> Bool {
-        guard let session, !volumes.contains(where: { $0.isMounted || $0.isAmbiguous }) else { return false }
-        // Include mounted partitions that cannot be selected in the menu (e.g. a volume without a UUID).
-        var mounts: UnsafeMutablePointer<statfs>?
-        let count = getmntinfo_r_np(&mounts, MNT_NOWAIT)
-        guard count > 0, let mounts else { return false }
-        defer { free(mounts) }
-        for var mount in UnsafeBufferPointer(start: mounts, count: Int(count)) where mount.f_flags & UInt32(MNT_LOCAL) != 0 {
-            let source = withUnsafeBytes(of: &mount.f_mntfromname) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
-            let path = withUnsafeBytes(of: &mount.f_mntonname) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
-            guard let disk = DADiskCreateFromVolumePath(nil, session, URL(fileURLWithPath: path) as CFURL),
-                  let description = DADiskCopyDescription(disk) as? [String: Any],
-                  DADiskGetBSDName(disk) != nil else {
-                if source.hasPrefix("/dev/") || source.contains("://") { return false }
-                continue // A local pseudo-filesystem such as devfs.
-            }
-            let media = DADiskCopyIOMedia(disk)
-            guard media != 0 else { return false }
-            defer { IOObjectRelease(media) }
-            let external = description[kDADiskDescriptionDeviceInternalKey as String] as? Bool == false
-            let removable = description[kDADiskDescriptionMediaRemovableKey as String] as? Bool == true
-            guard Self.isPhysicalExternal(media, external: external, removable: removable, includeOptical: true) == false
-            else { return false }
-        }
-        return true
-    }
-
     private func setMounted(_ mount: Bool, id: String, completion: @escaping (Bool) -> Void) {
         let matches = entries.filter { $0.value.uuid == id }
         guard matches.count == 1, let (bsd, previous) = matches.first, let session,
@@ -178,7 +151,7 @@ final class DiskService {
 
         let removable = d[kDADiskDescriptionMediaRemovableKey as String] as? Bool == true
         let external = d[kDADiskDescriptionDeviceInternalKey as String] as? Bool == false
-        guard isPhysicalExternal(media, external: external, removable: removable) == true else { return nil }
+        guard isPhysicalExternal(media, external: external, removable: removable) else { return nil }
         var attachment: UInt64 = 0
         guard IORegistryEntryGetRegistryEntryID(media, &attachment) == KERN_SUCCESS else { return nil }
         let uuid = CFUUIDCreateString(nil, (value as! CFUUID)) as String
@@ -188,24 +161,22 @@ final class DiskService {
                      deviceName: model, mounted: d[kDADiskDescriptionVolumePathKey as String] is URL)
     }
 
-    private static func isPhysicalExternal(_ media: io_service_t, external: Bool, removable: Bool,
-                                           includeOptical: Bool = false) -> Bool? {
+    private static func isPhysicalExternal(_ media: io_service_t, external: Bool, removable: Bool) -> Bool {
         // APFS presents synthesized volumes. Follow their I/O Service ancestors to the
         // underlying storage transport; disk images also expose ordinary mountable volumes.
         var node = media
         IOObjectRetain(node)
         var found = false
-        var internalTransport = false
         while node != 0 {
             let current = node
             defer { IOObjectRelease(current) }
             var className = [CChar](repeating: 0, count: 128)
-            guard IOObjectGetClass(node, &className) == KERN_SUCCESS else { return nil }
+            guard IOObjectGetClass(node, &className) == KERN_SUCCESS else { return false }
             let type = String(cString: className).lowercased()
             if type.contains("diskimage") || type.contains("hdix") ||
-                (!includeOptical && ["IOCDMedia", "IODVDMedia", "IOBDMedia"].contains(where: { (name: String) in
+                ["IOCDMedia", "IODVDMedia", "IOBDMedia"].contains(where: { (name: String) in
                     name.withCString { IOObjectConformsTo(current, $0) != 0 }
-                })) {
+                }) {
                 return false
             }
             if let properties = IORegistryEntryCreateCFProperty(node, "Protocol Characteristics" as CFString, nil, 0)?
@@ -214,7 +185,6 @@ final class DiskService {
                 let location = properties["Physical Interconnect Location"] as? String
                 if ["File", "RAM", "Virtual"].contains(location ?? "") || bus == "Virtual Interface" { return false }
                 let card = removable && bus == "Secure Digital"
-                if location == "Internal" { internalTransport = true }
                 if location == "External" || card || (external && location != "Internal" && !bus.isEmpty) {
                     found = true
                 }
@@ -223,7 +193,6 @@ final class DiskService {
             guard IORegistryEntryGetParentEntry(node, kIOServicePlane, &parent) == KERN_SUCCESS else { break }
             node = parent
         }
-        if found { return true }
-        return internalTransport ? false : nil
+        return found
     }
 }

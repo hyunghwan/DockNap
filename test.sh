@@ -8,9 +8,3 @@ xcrun swiftc -swift-version 5 -target "$(uname -m)-apple-macosx13.0" \
     Sources/SleepCoordinator.swift Tests/CoordinatorTests.swift \
     -o build/CoordinatorTests
 build/CoordinatorTests
-
-xcrun swiftc -swift-version 5 -target "$(uname -m)-apple-macosx13.0" \
-    -module-cache-path build/ModuleCache \
-    Sources/ChimeOutput.swift Sources/UnmountSound.swift Tests/SoundTests.swift \
-    -o build/SoundTests
-build/SoundTests

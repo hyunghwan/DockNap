@@ -22,11 +22,6 @@ final class PowerMonitor: @unchecked Sendable {
     private var acknowledged = Set<Int>()
     private var preparing = false
     private var prepared = false
-    private var soundStartDeadline = DispatchTime.now()
-
-    var canStartUnmountSound: Bool {
-        preparing && DispatchTime.now() < soundStartDeadline
-    }
 
     init(onWillSleep: @escaping (@escaping () -> Void) -> Void, onDidWake: @escaping () -> Void) {
         self.onWillSleep = onWillSleep
@@ -97,10 +92,7 @@ final class PowerMonitor: @unchecked Sendable {
             preparing = true
             let cycle = sleepCycle
             // Bound our own delay even if a disk is busy or has stopped responding.
-            let deadline = DispatchTime.now() + 12
-            // Reserve time for the short chime to finish before the hard sleep deadline.
-            soundStartDeadline = deadline - (UnmountSound.timeout + 0.25)
-            DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
                 self?.finish(cycle: cycle)
             }
             onWillSleep { [weak self] in

@@ -13,15 +13,11 @@ final class SleepCoordinator {
     private let mount: Operation
     private let schedule: (TimeInterval, @escaping () -> Void) -> Void
     var onFailure: ((String, String) -> Void)?
-    var canSignalSafeRemoval: () -> Bool = { false }
-    var onReadyForSleep: ((@escaping () -> Void) -> Void)?
 
     private var awake = true
     private var wakeGeneration = 0
     private var wakeTimerPending = false
     private var waitingForUnlock = false
-    private var didUnmountThisSleep = false
-    private var allUnmountsSucceeded = true
     private var unmounting = [String: UUID]()
     private var mounting = [String: UUID]()
     // Only successful unmounts earn a restore. Record the live attachment as
@@ -48,15 +44,12 @@ final class SleepCoordinator {
         wakeGeneration += 1
         wakeTimerPending = false
         waitingForUnlock = false
-        didUnmountThisSleep = false
-        allUnmountsSucceeded = true
         sleepReplies.append(allow)
         unmountVolumes(selected())
         acknowledgeIfIdle()
     }
 
     private func unmountVolumes(_ ids: Set<String>) {
-        let cycle = wakeGeneration
         // Reserve every request before dispatching: callbacks may be synchronous.
         let work: [(String, String, UUID)] = ids.sorted().compactMap { id in
             guard unmounting[id] == nil, mounting[id] == nil, mounted(id) == true,
@@ -72,14 +65,10 @@ final class SleepCoordinator {
                 if self.attachment(id) == connection && self.selected().contains(id) {
                     if ok {
                         self.restore[id] = connection
-                        if self.wakeGeneration == cycle { self.didUnmountThisSleep = true }
                         self.scheduleRestore()
                     } else {
-                        self.allUnmountsSucceeded = false
                         self.onFailure?(id, "unmount")
                     }
-                } else {
-                    self.allUnmountsSucceeded = false
                 }
                 self.acknowledgeIfIdle()
             }
@@ -95,7 +84,6 @@ final class SleepCoordinator {
     func volumeDisconnected(_ id: String) { forget(id) }
 
     private func forget(_ id: String) {
-        if unmounting[id] != nil || restore[id] != nil { allUnmountsSucceeded = false }
         restore.removeValue(forKey: id)
         unmounting.removeValue(forKey: id)
         mounting.removeValue(forKey: id)
@@ -103,20 +91,10 @@ final class SleepCoordinator {
     }
 
     private func acknowledgeIfIdle() {
-        guard !sleepReplies.isEmpty, unmounting.isEmpty, mounting.isEmpty else { return }
-        var replies = sleepReplies
+        guard unmounting.isEmpty, mounting.isEmpty else { return }
+        let replies = sleepReplies
         sleepReplies.removeAll()
-        // The completion belongs to this sleep, even if playback ends after a wake.
-        let allow = {
-            let pending = replies
-            replies.removeAll()
-            pending.forEach { $0() }
-        }
-        if !awake, didUnmountThisSleep, allUnmountsSucceeded, let onReadyForSleep, canSignalSafeRemoval() {
-            onReadyForSleep(allow)
-        } else {
-            allow()
-        }
+        replies.forEach { $0() }
     }
 
     private func scheduleRestore(after delay: TimeInterval = 1.5) {
