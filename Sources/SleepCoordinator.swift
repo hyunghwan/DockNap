@@ -8,6 +8,7 @@ final class SleepCoordinator {
     private let selected: () -> Set<String>
     private let mounted: (String) -> Bool?
     private let attachment: (String) -> String?
+    private let canMountVolumes: () -> Bool
     private let unmount: Operation
     private let mount: Operation
     private let schedule: (TimeInterval, @escaping () -> Void) -> Void
@@ -16,6 +17,7 @@ final class SleepCoordinator {
     private var awake = true
     private var wakeGeneration = 0
     private var wakeTimerPending = false
+    private var waitingForUnlock = false
     private var unmounting = [String: UUID]()
     private var mounting = [String: UUID]()
     // Only successful unmounts earn a restore. Record the live attachment as
@@ -26,19 +28,22 @@ final class SleepCoordinator {
     init(selected: @escaping () -> Set<String>, mounted: @escaping (String) -> Bool?,
          unmount: @escaping Operation, mount: @escaping Operation,
          schedule: @escaping (TimeInterval, @escaping () -> Void) -> Void,
-         attachment: @escaping (String) -> String?) {
+         attachment: @escaping (String) -> String?,
+         canMountVolumes: @escaping () -> Bool) {
         self.selected = selected
         self.mounted = mounted
         self.unmount = unmount
         self.mount = mount
         self.schedule = schedule
         self.attachment = attachment
+        self.canMountVolumes = canMountVolumes
     }
 
     func willSleep(allow: @escaping () -> Void) {
         awake = false
         wakeGeneration += 1
         wakeTimerPending = false
+        waitingForUnlock = false
         sleepReplies.append(allow)
         unmountVolumes(selected())
         acknowledgeIfIdle()
@@ -92,13 +97,26 @@ final class SleepCoordinator {
         replies.forEach { $0() }
     }
 
-    private func scheduleRestore() {
+    private func scheduleRestore(after delay: TimeInterval = 1.5) {
         guard awake, !restore.isEmpty, !wakeTimerPending else { return }
         wakeTimerPending = true
         let generation = wakeGeneration
-        schedule(1.5) { [weak self] in
+        schedule(delay) { [weak self] in
             guard let self, self.awake, self.wakeGeneration == generation else { return }
             self.wakeTimerPending = false
+            guard !self.restore.isEmpty else { return }
+            // loginwindow can eject the entire device if asked to mount it at the lock screen.
+            guard self.canMountVolumes() else {
+                self.waitingForUnlock = true
+                self.scheduleRestore(after: 5)
+                return
+            }
+            if self.waitingForUnlock {
+                self.waitingForUnlock = false
+                // Allow loginwindow to finish unregistering its disk approval callbacks.
+                self.scheduleRestore()
+                return
+            }
             self.restoreConnectedVolumes()
         }
     }

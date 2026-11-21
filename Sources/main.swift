@@ -16,7 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         mounted: { [unowned self] in self.uniqueVolume($0)?.isMounted },
         unmount: disks.unmount, mount: disks.mount,
         schedule: { delay, action in DispatchQueue.main.asyncAfter(deadline: .now() + delay) { action() } },
-        attachment: { [unowned self] in self.uniqueVolume($0)?.sessionID }
+        attachment: { [unowned self] in self.uniqueVolume($0)?.sessionID },
+        canMountVolumes: SessionState.canMountVolumes
     )
 
     func applicationDidFinishLaunching(_ notification: Notification) {

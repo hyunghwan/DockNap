@@ -25,7 +25,7 @@ The local build uses ad hoc signing and requires no developer account. Run the c
 
 DockNap unmounts each selected volume and leaves the device attached so it can mount the volume again. A busy volume can stay mounted. Before physically unplugging a dock, check that all its volumes have finished unmounting.
 
-On wake, DockNap checks that the selected volume is still on the same connection. If your dock cuts power during sleep, macOS can see the returning drive as newly connected and handle mounting itself.
+On wake, DockNap waits for you to unlock your Mac before it requests a mount. While the screen is locked, macOS can reject a mount request and eject the entire drive. DockNap checks that each selected volume is still on the same connection before restoring it. If your dock cuts power during sleep, macOS can see the returning drive as newly connected and handle mounting itself.
 
 ## License
 

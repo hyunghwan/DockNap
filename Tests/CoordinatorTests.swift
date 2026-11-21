@@ -9,6 +9,7 @@ private final class Rig {
     var acknowledgements = 0
     var attachmentOverrides = [String: String]()
     var deferMounts = false
+    var canMountVolumes = true
     private var pendingMounts = [String: (Bool) -> Void]()
     private var replies = [String: [(Bool) -> Void]]()
     private var scheduled = [(deadline: TimeInterval, action: () -> Void)]()
@@ -36,7 +37,8 @@ private final class Rig {
         },
         attachment: { id in
             self.mounted[id] == nil ? nil : (self.attachmentOverrides[id] ?? id)
-        }
+        },
+        canMountVolumes: { self.canMountVolumes }
     )
 
     func sleep() {
@@ -62,14 +64,19 @@ private final class Rig {
         reply(present)
     }
 
+    func runNextTimer() -> Bool {
+        guard let i = scheduled.indices.min(by: {
+            scheduled[$0].deadline < scheduled[$1].deadline
+        }) else { return false }
+        let timer = scheduled.remove(at: i)
+        now = timer.deadline
+        timer.action()
+        return true
+    }
+
     func runTimers() {
         for _ in 0..<100 {
-            guard let i = scheduled.indices.min(by: {
-                scheduled[$0].deadline < scheduled[$1].deadline
-            }) else { return }
-            let timer = scheduled.remove(at: i)
-            now = timer.deadline
-            timer.action()
+            if !runNextTimer() { return }
         }
         fatalError("Timer queue did not settle")
     }
@@ -100,7 +107,9 @@ private enum CoordinatorTests {
         noSelectionAndNoPriorSleep()
         attachmentReplacedWhileAsleep()
         mountReplyAfterNextSleep()
-        print("7 coordinator scenarios passed")
+        lockedWakeWaitsForUnlock()
+        sleepingAgainWhileWaitingForUnlock()
+        print("9 coordinator scenarios passed")
     }
 
     /// Busy, absent, already-unmounted and unselected volumes must never be mounted by this cycle.
@@ -221,5 +230,48 @@ private enum CoordinatorTests {
         rig.runTimers()
         check(rig.unmountCalls.isEmpty && rig.mountCalls.isEmpty && rig.acknowledgements == 1,
               "Empty selection or unrelated wake must leave all volumes alone")
+    }
+
+    static func lockedWakeWaitsForUnlock() {
+        let selected: Set<String> = ["keep", "deselected", "disconnected", "replaced"]
+        let rig = Rig(Dictionary(uniqueKeysWithValues: selected.map { ($0, true) }), selected: selected)
+        rig.sleep()
+        for id in selected { rig.finishUnmount(id) }
+
+        rig.canMountVolumes = false
+        rig.coordinator.didWake()
+        for _ in 0..<3 {
+            check(rig.runNextTimer(), "A locked wake lost its pending restore")
+            check(rig.mountCalls.isEmpty, "A mount request reached the lock screen")
+        }
+        rig.removeSelection("deselected")
+        rig.disconnect("disconnected")
+        rig.attachmentOverrides["replaced"] = "replacement"
+
+        rig.canMountVolumes = true
+        check(rig.runNextTimer() && rig.mountCalls.isEmpty, "Give the login screen time to release disk approvals")
+        rig.canMountVolumes = false
+        check(rig.runNextTimer() && rig.mountCalls.isEmpty, "The session locked again before the mount")
+        rig.canMountVolumes = true
+        rig.runTimers()
+        check(rig.mountCalls == ["keep"], "Unlock should only restore the still-selected original attachment")
+        check(rig.mounted["keep"] == true, "The deferred mount did not complete")
+    }
+
+    static func sleepingAgainWhileWaitingForUnlock() {
+        let rig = Rig(["A": true], selected: ["A"])
+        rig.sleep()
+        rig.finishUnmount("A")
+        rig.canMountVolumes = false
+        rig.coordinator.didWake()
+        check(rig.runNextTimer() && rig.mountCalls.isEmpty, "Expected restore to wait at the lock screen")
+
+        rig.sleep()
+        rig.canMountVolumes = true
+        rig.runTimers()
+        check(rig.mountCalls.isEmpty, "A pending lock check mounted the disk during the next sleep")
+        rig.coordinator.didWake()
+        rig.runTimers()
+        check(rig.mountCalls == ["A"] && rig.acknowledgements == 2, "The next wake must restore exactly once")
     }
 }
